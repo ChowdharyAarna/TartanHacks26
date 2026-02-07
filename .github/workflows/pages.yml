@@ -33,6 +33,8 @@ jobs:
       - run: npm run build
         env:
           VITE_API_BASE: https://cornwall-strengthen-cuts-tune.trycloudflare.com 
+      - run: ls -la frontend/dist && echo "----" && ls -la frontend/dist/assets | head
+
 
       - uses: actions/upload-pages-artifact@v3
         with:

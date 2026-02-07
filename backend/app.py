@@ -94,6 +94,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://chowdharyaarna.github.io",
+        "https://cornwall-strengthen-cuts-tune.trycloudflare.com",
         # OPTIONAL: add your tunnel origin here when you have it
         # "https://random-thing.trycloudflare.com",
         # "https://xxxx.ngrok-free.app",

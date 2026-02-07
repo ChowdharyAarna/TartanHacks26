@@ -429,7 +429,7 @@ def redistribute_bad_breaths(
                 "from": bt,
                 "to": None,
                 "status": "kept",
-                "reason": "no previous good breath available",
+                "reason": "breathe for more time at the beginning of the song",
             })
             continue
 
@@ -460,7 +460,7 @@ def redistribute_bad_breaths(
         to = item.get("to")
         if item["status"] == "kept":
             messages.append(
-                f"Kept bad breath at {bt:.2f}s (no previous good breath available)."
+                f"Kept bad breath control at {bt:.2f}s (breathe for more time at the beginning of the song)."
             )
         else:
             moved_regions = item.get("moved_regions", []) or []
@@ -471,12 +471,12 @@ def redistribute_bad_breaths(
                 if len(moved_regions) > 1:
                     extra = f" (+{len(moved_regions)-1} more)"
                 messages.append(
-                    f"Replaced bad breath at {bt:.2f}s → previous good breath at {to:.2f}s "
+                    f"Replaced bad breath control at {bt:.2f}s → breathe more at {to:.2f}s "
                     f"({first['label']} @ {first['start']:.2f}–{first['end']:.2f}s){extra}."
                 )
             else:
                 messages.append(
-                    f"Replaced bad breath at {bt:.2f}s → previous good breath at {to:.2f}s."
+                    f"Replaced bad breath control at {bt:.2f}s → breathe more at {to:.2f}s."
                 )
 
     # Per-breath summary after redistribution
@@ -517,7 +517,7 @@ def print_redistribution_summary(result: Dict[str, Any]) -> None:
     """Print the human messages."""
     msgs = result.get("messages", []) or []
     if not msgs:
-        print("No bad breaths detected (nothing to redistribute).")
+        print("No bad breath control detected (nothing to redistribute).")
         return
     for m in msgs:
         print(m)

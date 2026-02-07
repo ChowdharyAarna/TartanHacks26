@@ -148,6 +148,7 @@ def redistribute_bad_breaths(
     """
     breath_starts = _extract_breath_starts(breaths_dict)
     regions = _extract_bad_regions(bad_dict)
+    print(f"--------------------{breath_starts}")
 
     # Map: anchor_breath_time -> list of region descriptors blamed on it
     blamed: Dict[float, List[Dict[str, Any]]] = {}
@@ -177,23 +178,28 @@ def redistribute_bad_breaths(
     moved_blame: Dict[float, List[Dict[str, Any]]] = {t: list(v) for t, v in blamed.items()}
 
     def _find_previous_good(bt: float) -> Optional[float]:
+        """
+        Find the closest earlier breath such that:
+        - t < bt
+        - int(t) != int(bt)   (different integer second bucket)
+        - t not in bad_set_current
+        """
+        bt_sec = int(bt)
         prev = None
-        for t in breath_starts:
-            if t < bt:
-                prev = t
-            else:
-                break
-        # walk backwards until we find something not currently bad
-        while prev is not None and prev in bad_set_current:
-            # find earlier one
-            earlier = None
-            for t in breath_starts:
-                if t < prev:
-                    earlier = t
-                else:
-                    break
-            prev = earlier
+
+        # iterate backwards for clarity and correctness
+        for t in reversed(breath_starts):
+            if t >= bt:
+                continue
+            if int(t) == bt_sec:
+                continue
+            if t in bad_set_current:
+                continue
+            prev = t
+            break
+
         return prev
+
 
     if redistribute_to != "previous_good":
         raise ValueError("Only redistribute_to='previous_good' is implemented (as requested).")

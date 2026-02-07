@@ -137,7 +137,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               currentTime={currentTime}
             /> */}
 
-            <BackendDataPanel result={result} />
+            {/* <BackendDataPanel result={result} /> */}
           </div>
         </div>
       </main>

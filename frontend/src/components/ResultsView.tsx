@@ -175,7 +175,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               explanation={result.shortExplanation}
             />
 
-            <SummaryCards summary={result.summary} />
+            {/* <SummaryCards summary={result.summary} /> */}
 
             <AnnotationList
               annotations={result.annotations}

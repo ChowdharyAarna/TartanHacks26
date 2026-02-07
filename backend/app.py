@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, asdict
+from enum import Enum
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
@@ -17,14 +22,41 @@ from pipeline.fused_breaths import extract_fused_resp
 
 # Import the bad singing detection pipeline
 import sys
-import os
 
 # Add the directory containing bad_singing_onefile_fixed.py to the path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline.bad_singing import Config, run_pipeline as run_singing_pipeline
-
 from pipeline.breath_feedback_pipeline import redistribute_bad_breaths, print_redistribution_summary
+
+# -----------------------------
+# Job store + executor (+ cancel)
+# -----------------------------
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    done = "done"
+    error = "error"
+    cancelled = "cancelled"
+
+
+@dataclass
+class JobState:
+    status: JobStatus
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    error: str | None = None
+    result: dict | None = None
+    cancel_requested: bool = False
+
+
+JOBS: dict[str, JobState] = {}
+JOB_TASKS: dict[str, asyncio.Task] = {}  # job_id -> asyncio task
+
+# NOTE: keep this small; each process runs heavy analysis
+EXECUTOR = ProcessPoolExecutor(max_workers=2)
+
 # -----------------------------
 # Paths / storage
 # -----------------------------
@@ -134,9 +166,7 @@ def _build_analysis_result(resp_out: Dict[str, Any], video_url: str) -> Dict[str
     else:
         bpm_text = f"Estimated breath rate: {float(bpm):.1f} bpm."
 
-    short_expl = (
-        f"{bpm_text} Detected {len(inhalations)} inhalations. Tracking stability: {stability:.2f}."
-    )
+    short_expl = f"{bpm_text} Detected {len(inhalations)} inhalations. Tracking stability: {stability:.2f}."
 
     return {
         "videoUrl": video_url,
@@ -216,7 +246,7 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
         # Create output directory for this specific video
         out_dir = SINGING_OUTPUT_DIR / vid_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Configure the singing analysis
         cfg = Config(
             sr=16000,
@@ -230,10 +260,10 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
             save_timeline=True,
             save_plot=True,
         )
-        
+
         # Run the pipeline
         results = run_singing_pipeline(video_path, str(out_dir), cfg)
-        
+
         # Convert file paths to URLs for frontend access
         if "artifacts" in results:
             if "timeline_csv" in results["artifacts"]:
@@ -241,30 +271,122 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
                 if csv_path.exists():
                     rel_path = csv_path.relative_to(OUTPUT_DIR)
                     results["artifacts"]["timeline_csv_url"] = f"/outputs/{rel_path}"
-            
+
             if "report_png" in results["artifacts"]:
                 png_path = Path(results["artifacts"]["report_png"])
                 if png_path.exists():
                     rel_path = png_path.relative_to(OUTPUT_DIR)
                     results["artifacts"]["report_png_url"] = f"/outputs/{rel_path}"
-        
+
         # Store results in cache
         SINGING_RESULTS_CACHE[vid_id] = results
-        
-        return {
-            "success": True,
-            "video_id": vid_id,
-            "results": results
-        }
-        
+
+        return {"success": True, "video_id": vid_id, "results": results}
+
     except Exception as e:
         import traceback
+
         error_details = traceback.format_exc()
-        return {
-            "success": False,
-            "error": str(e),
-            "error_details": error_details
-        }
+        return {"success": False, "error": str(e), "error_details": error_details}
+
+
+# -----------------------------
+# Heavy analysis (pure function for ProcessPoolExecutor)
+# -----------------------------
+def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
+    # Run breathing analysis
+    resp_out = extract_fused_resp(video_path, outputs_dir=str(OUTPUT_DIR))
+
+    # Generate breathing plot
+    plot_name = f"breath_plot_{vid_id}.png"
+    plot_path = OUTPUT_DIR / plot_name
+    make_breath_plot(resp_out, plot_path)
+
+    video_url = f"/media/{Path(video_path).name}"
+    result = _build_analysis_result(resp_out, video_url)
+    result["plot_url"] = f"/outputs/{plot_name}" if plot_path.exists() else None
+
+    # Singing analysis
+    singing_results = run_singing_analysis(video_path, vid_id)
+    result["singing_analysis"] = singing_results
+    result["video_id"] = vid_id
+
+    # Breath feedback
+    try:
+        if singing_results.get("success") and "results" in singing_results:
+            breath_feedback = redistribute_bad_breaths(resp_out, singing_results["results"], anchor_mode="before")
+            # Optional: keep console logging for debugging
+            try:
+                print_redistribution_summary(breath_feedback)
+            except Exception:
+                pass
+            result["breath_feedback"] = breath_feedback
+        else:
+            result["breath_feedback"] = {
+                "error": "Singing analysis failed",
+                "details": singing_results.get("error", "Unknown error"),
+            }
+    except Exception as e:
+        import traceback
+
+        result["breath_feedback"] = {"error": str(e), "traceback": traceback.format_exc()}
+
+    return result
+
+
+# -----------------------------
+# Background runner (+ cancel support)
+# -----------------------------
+async def _run_job(job_id: str, video_path: str, vid_id: str, suffix: str) -> None:
+    job = JOBS.get(job_id)
+    if not job:
+        return
+
+    # cancelled before start
+    if job.cancel_requested:
+        job.status = JobStatus.cancelled
+        job.finished_at = time.time()
+        return
+
+    job.status = JobStatus.running
+    job.started_at = time.time()
+
+    try:
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(EXECUTOR, run_full_analysis, video_path, vid_id, suffix)
+        result = await fut
+
+        job = JOBS.get(job_id)
+        if not job:
+            return
+
+        # If cancelled while process work was running, ignore result
+        if job.cancel_requested:
+            job.status = JobStatus.cancelled
+            job.result = None
+            return
+
+        job.result = result
+        job.status = JobStatus.done
+
+    except asyncio.CancelledError:
+        job = JOBS.get(job_id)
+        if job:
+            job.status = JobStatus.cancelled
+            job.result = None
+        raise
+
+    except Exception as e:
+        job = JOBS.get(job_id)
+        if job:
+            job.status = JobStatus.error
+            job.error = str(e)
+
+    finally:
+        job = JOBS.get(job_id)
+        if job and job.finished_at is None:
+            job.finished_at = time.time()
+        JOB_TASKS.pop(job_id, None)
 
 
 # -----------------------------
@@ -272,71 +394,70 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
 # -----------------------------
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)) -> JSONResponse:
-    """
-    Main endpoint: analyzes both breathing and singing from uploaded video.
-    Stores singing results in SINGING_RESULTS_CACHE.
-    """
     if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
-        return JSONResponse(
-            {"error": f"Unsupported content type: {file.content_type}"},
-            status_code=400,
-        )
+        return JSONResponse({"error": f"Unsupported content type: {file.content_type}"}, status_code=400)
 
     filename = (file.filename or "").lower()
     suffix = ".mp4" if filename.endswith(".mp4") else ".mov"
 
     vid_id = uuid.uuid4().hex
     out_path = UPLOAD_DIR / f"{vid_id}{suffix}"
+    out_path.write_bytes(await file.read())
 
-    data = await file.read()
-    out_path.write_bytes(data)
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = JobState(status=JobStatus.queued, created_at=time.time())
 
-    # Run breathing analysis
-    resp_out = extract_fused_resp(str(out_path), outputs_dir=str(OUTPUT_DIR))
+    # fire-and-forget background task (tracked so we can cancel)
+    task = asyncio.create_task(_run_job(job_id, str(out_path), vid_id, suffix))
+    JOB_TASKS[job_id] = task
 
-    # Generate breathing plot
-    plot_name = f"breath_plot_{vid_id}.png"
-    plot_path = OUTPUT_DIR / plot_name
-    make_breath_plot(resp_out, plot_path)
-
-    video_url = f"/media/{out_path.name}"
-    result = _build_analysis_result(resp_out, video_url)
-    result["plot_url"] = f"/outputs/{plot_name}" if plot_path.exists() else None
-
-    # Run singing analysis (results stored in SINGING_RESULTS_CACHE)
-    singing_results = run_singing_analysis(str(out_path), vid_id)
-    result["singing_analysis"] = singing_results
-    result["video_id"] = vid_id
-
-    # Run breath feedback analysis - FIXED
-    try:
-        # Check if singing analysis succeeded
-        if singing_results.get("success") and "results" in singing_results:
-            # breath_feedback = analyze_breaths_and_bad_regions(
-            #     input_media_path=str(out_path),  # Use actual uploaded video
-            #     breaths_dict=resp_out,
-            #     bad_dict=singing_results["results"],  # FIXED: Extract nested results
-            #     out_dir=str(OUTPUT_DIR / vid_id)
-            # )
-            breath_feedback = redistribute_bad_breaths(resp_out, singing_results["results"], anchor_mode="before")
-            print_redistribution_summary(breath_feedback)
-            result["breath_feedback"] = breath_feedback
-        else:
-            # Singing analysis failed, skip breath feedback
-            result["breath_feedback"] = {
-                "error": "Singing analysis failed",
-                "details": singing_results.get("error", "Unknown error")
-            }
-    except Exception as e:
-        import traceback
-        print(f"Breath feedback analysis failed: {e}")
-        print(traceback.format_exc())
-        result["breath_feedback"] = {
-            "error": str(e),
-            "traceback": traceback.format_exc()
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "video_id": vid_id,
+            "status_url": f"/api/jobs/{job_id}",
+            "cancel_url": f"/api/jobs/{job_id}/cancel",
+            "video_url": f"/media/{out_path.name}",
         }
+    )
 
-    return JSONResponse(result)
+
+@app.get("/api/jobs/{job_id}")
+async def job_status(job_id: str) -> JSONResponse:
+    job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+
+    payload = asdict(job)
+    # Don’t return full result until done
+    if job.status != JobStatus.done:
+        payload["result"] = None
+
+    return JSONResponse(payload)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> JSONResponse:
+    job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+
+    # already terminal
+    if job.status in (JobStatus.done, JobStatus.error, JobStatus.cancelled):
+        return JSONResponse({"job_id": job_id, "status": job.status})
+
+    job.cancel_requested = True
+    job.status = JobStatus.cancelled
+    job.result = None
+    job.finished_at = time.time()
+
+    # Cancels the awaiting task (best effort; process may still finish in background)
+    t = JOB_TASKS.get(job_id)
+    if t:
+        t.cancel()
+
+    return JSONResponse({"job_id": job_id, "status": job.status})
+
 
 @app.post("/api/analyze-singing")
 async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
@@ -345,10 +466,7 @@ async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
     Stores singing results in SINGING_RESULTS_CACHE.
     """
     if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
-        return JSONResponse(
-            {"error": f"Unsupported content type: {file.content_type}"},
-            status_code=400,
-        )
+        return JSONResponse({"error": f"Unsupported content type: {file.content_type}"}, status_code=400)
 
     filename = (file.filename or "").lower()
     suffix = ".mp4" if filename.endswith(".mp4") else ".mov"
@@ -360,15 +478,11 @@ async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
     out_path.write_bytes(data)
 
     video_url = f"/media/{out_path.name}"
-    
+
     # Run singing analysis (results stored in SINGING_RESULTS_CACHE)
     singing_results = run_singing_analysis(str(out_path), vid_id)
-    
-    return JSONResponse({
-        "videoUrl": video_url,
-        "video_id": vid_id,
-        "singing_analysis": singing_results
-    })
+
+    return JSONResponse({"videoUrl": video_url, "video_id": vid_id, "singing_analysis": singing_results})
 
 
 @app.get("/api/singing-results/{vid_id}")
@@ -377,15 +491,9 @@ async def get_singing_results(vid_id: str) -> JSONResponse:
     Retrieve stored singing analysis results by video ID.
     """
     if vid_id not in SINGING_RESULTS_CACHE:
-        return JSONResponse(
-            {"error": f"No singing analysis found for video ID: {vid_id}"},
-            status_code=404,
-        )
-    
-    return JSONResponse({
-        "video_id": vid_id,
-        "results": SINGING_RESULTS_CACHE[vid_id]
-    })
+        return JSONResponse({"error": f"No singing analysis found for video ID: {vid_id}"}, status_code=404)
+
+    return JSONResponse({"video_id": vid_id, "results": SINGING_RESULTS_CACHE[vid_id]})
 
 
 @app.get("/api/singing-results")
@@ -393,7 +501,4 @@ async def list_singing_results() -> JSONResponse:
     """
     List all video IDs that have singing analysis results.
     """
-    return JSONResponse({
-        "video_ids": list(SINGING_RESULTS_CACHE.keys()),
-        "count": len(SINGING_RESULTS_CACHE)
-    })
+    return JSONResponse({"video_ids": list(SINGING_RESULTS_CACHE.keys()), "count": len(SINGING_RESULTS_CACHE)})

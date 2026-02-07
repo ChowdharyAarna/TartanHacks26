@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+
 import json
 import os
 import subprocess
@@ -10,6 +17,7 @@ import webrtcvad
 
 # graphing
 import matplotlib.pyplot as plt
+
 
 
 # ============================================================
@@ -60,19 +68,71 @@ def mp4_to_wav(mp4_path: str, out_wav_path: str, sr: int = 16000):
 # ============================================================
 # Phase 2: WAV -> vocals-only WAV (Demucs)
 # ============================================================
-def make_vocals_only(wav_path: str, out_dir: str = "separated") -> str:
+
+
+def make_vocals_only(wav_path: str, out_dir: str) -> str:
     """
-    Run Demucs and return the path to the generated vocals.wav.
+    Attempt to separate vocals from a WAV using demucs.
+    Returns path to vocals stem if successful; otherwise returns the original wav_path.
+
+    This is intentionally failure-tolerant for hackathon/demo stability.
     """
-    subprocess.run(["demucs", "-o", out_dir, wav_path], check=True)
+    wav_path_p = Path(wav_path)
+    out_dir_p = Path(out_dir)
+    out_dir_p.mkdir(parents=True, exist_ok=True)
 
-    stem_name = Path(wav_path).stem
-    vocals_path = Path(out_dir) / "htdemucs" / stem_name / "vocals.wav"
+    # If demucs isn't on PATH, skip
+    if shutil.which("demucs") is None:
+        print("[WARN] demucs not found on PATH; using raw audio.")
+        return str(wav_path_p)
 
-    if not vocals_path.exists():
-        raise FileNotFoundError(f"Could not find Demucs vocals output at: {vocals_path}")
+    cmd = ["demucs", "-d", "cpu", "-o", str(out_dir_p), str(wav_path_p)]
 
-    return str(vocals_path)
+    try:
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if p.returncode != 0:
+            print("[WARN] demucs failed; using raw audio.")
+            # Demucs tends to print the real reason to stderr; keep last chunk to avoid huge logs
+            if p.stderr:
+                print("[demucs stderr tail]\n" + p.stderr[-2000:])
+            if p.stdout:
+                print("[demucs stdout tail]\n" + p.stdout[-2000:])
+            return str(wav_path_p)
+
+        # Demucs output layout is typically:
+        #   out_dir/<model_name>/<track_stem_name>/vocals.wav
+        # But model name can vary; track folder is derived from input filename.
+        track_name = wav_path_p.stem  # e.g. "xxxxx_audio"
+        candidates = list(out_dir_p.rglob(f"{track_name}/vocals.*"))
+
+        # Fallback: if track folder naming differs, just search any vocals.* in out_dir
+        if not candidates:
+            candidates = list(out_dir_p.rglob("vocals.*"))
+
+        # Prefer wav/flac over mp3 (if multiple)
+        def score_path(pth: Path) -> tuple[int, int]:
+            ext = pth.suffix.lower()
+            ext_rank = {"wav": 0, "flac": 1, "aiff": 2, "mp3": 3}.get(ext.lstrip("."), 9)
+            # deeper paths usually correspond to correct demucs layout
+            depth_rank = -len(pth.parts)
+            return (ext_rank, depth_rank)
+
+        if candidates:
+            best = sorted(candidates, key=score_path)[0]
+            return str(best)
+
+        print("[WARN] demucs succeeded but vocals stem not found; using raw audio.")
+        return str(wav_path_p)
+
+    except Exception as e:
+        print("[WARN] demucs exception; using raw audio:", repr(e))
+        return str(wav_path_p)
+
 
 
 # ============================================================

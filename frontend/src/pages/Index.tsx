@@ -59,11 +59,11 @@ const Index = () => {
             <>
               <div className="text-center mb-8">
                 <h2 className="text-2xl font-bold mb-2">
-                  Upload Your Singing Video
+                  Upload Your Singing Video (Up to 5MB)
                 </h2>
                 <p className="text-muted-foreground">
                   We'll analyze your breathing patterns and provide detailed
-                  feedback on breath control
+                  feedback on breath control.
                 </p>
               </div>
               <VideoUpload

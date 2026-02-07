@@ -34,9 +34,12 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
   const hasFeedback =
     Array.isArray(feedbackMessages) && feedbackMessages.length > 0;
 
-  const plotUrl = (result as any)?.plotUrl ?? (result as any)?.plot_url ?? (result as any)?.plotUrl;
-  const singingPngUrl = (result as any)?.singing_analysis?.results?.artifacts?.report_png_url;
-  const singingCsvUrl = (result as any)?.singing_analysis?.results?.artifacts?.timeline_csv_url;
+  const plotUrl =
+    (result as any)?.plotUrl ?? (result as any)?.plot_url ?? (result as any)?.plotUrl;
+  const singingPngUrl =
+    (result as any)?.singing_analysis?.results?.artifacts?.report_png_url;
+  const singingCsvUrl =
+    (result as any)?.singing_analysis?.results?.artifacts?.timeline_csv_url;
 
   return (
     <div className="min-h-screen bg-background">
@@ -76,16 +79,36 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               />
             </div>
 
+            {/* ✅ Feedback card BEFORE graphs */}
+            {hasFeedback && (
+              <div className="bg-card rounded-xl p-4 border">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-base font-semibold">Breath feedback</h2>
+                  <span className="text-xs text-muted-foreground">
+                    Suggestions based on your clip
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {feedbackMessages.map((msg: string, i: number) => (
+                    <div
+                      key={i}
+                      className="rounded-lg border bg-background/40 px-3 py-2 text-sm"
+                    >
+                      {msg}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Live waveform synced to playback */}
             {result.report && (
               <div className="bg-card rounded-xl p-4 border">
                 <h2 className="text-base font-semibold mb-3">
                   Breathing Waveform (synced)
                 </h2>
-                <WaveformPlot
-                  report={result.report}
-                  currentTime={currentTime}
-                />
+                <WaveformPlot report={result.report} currentTime={currentTime} />
               </div>
             )}
 
@@ -140,29 +163,6 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
                       Download timeline CSV
                     </a>
                   )}
-                </div>
-              </div>
-            )}
-
-            {/* ✅ Feedback card AFTER graphs */}
-            {hasFeedback && (
-              <div className="bg-card rounded-xl p-4 border">
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-base font-semibold">Breath feedback</h2>
-                  <span className="text-xs text-muted-foreground">
-                    Suggestions based on your clip
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {feedbackMessages.map((msg: string, i: number) => (
-                    <div
-                      key={i}
-                      className="rounded-lg border bg-background/40 px-3 py-2 text-sm"
-                    >
-                      {msg}
-                    </div>
-                  ))}
                 </div>
               </div>
             )}

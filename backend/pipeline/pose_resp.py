@@ -30,7 +30,12 @@ import numpy as np
 import mediapipe as mp
 from scipy.signal import butter, filtfilt, find_peaks, savgol_filter
 
-mp_pose = mp.solutions.pose
+try:
+    mp_pose = mp.solutions.pose
+except AttributeError:
+    from mediapipe.python import solutions as mp_solutions
+    mp_pose = mp_solutions.pose
+
 
 
 def _interp_nan(a: np.ndarray) -> np.ndarray:

@@ -1,8 +1,12 @@
 fastapi
 uvicorn[standard]
 python-multipart
-numpy
 opencv-python
 mediapipe
 scipy
 matplotlib
+numpy>=1.23
+librosa>=0.10.0
+webrtcvad>=2.0.10
+demucs
+matplotlib>=3.6

@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from pipeline.pose_resp import extract_pose_resp
+from pipeline.fused_breaths import extract_fused_resp
 
 # -----------------------------
 # Paths / storage
@@ -208,7 +208,7 @@ async def analyze(file: UploadFile = File(...)) -> JSONResponse:
     data = await file.read()
     out_path.write_bytes(data)
 
-    resp_out = extract_pose_resp(str(out_path))
+    resp_out = extract_fused_resp(str(out_path), outputs_dir=str(OUTPUT_DIR))
 
     # Generate plot file and return URL
     plot_name = f"breath_plot_{vid_id}.png"

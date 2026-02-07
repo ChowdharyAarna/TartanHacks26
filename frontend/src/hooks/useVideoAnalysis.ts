@@ -1,11 +1,28 @@
-import { useState } from "react";
-import { AnalysisResult, AnalyzeEnqueueResponse, JobStatusResponse, JobStatus } from "@/types/analysis";
+import { useRef, useState } from "react";
+import { AnalysisResult } from "@/types/analysis";
 import { demoResult } from "@/lib/demoData";
 
 // Set to true to use demo data instead of real API
 const USE_DEMO_MODE = false;
 
-// Types are defined in src/types/analysis.ts and match the FastAPI backend.
+type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
+
+type AnalyzeEnqueueResponse = {
+  job_id: string;
+  video_id: string;
+  status_url: string; // e.g. "/api/jobs/<job_id>"
+  cancel_url: string; // e.g. "/api/jobs/<job_id>/cancel"
+  video_url: string; // e.g. "/media/<vid>.mp4"
+};
+
+type JobResponse = {
+  status: JobStatus;
+  created_at: number;
+  started_at?: number | null;
+  finished_at?: number | null;
+  error?: string | null;
+  result?: any | null; // when done, this is your AnalysisResult payload
+};
 
 interface UseVideoAnalysisReturn {
   isAnalyzing: boolean;
@@ -14,15 +31,29 @@ interface UseVideoAnalysisReturn {
   analyzeVideo: (file: File) => Promise<void>;
   reset: () => void;
 
-  // Optional: allow user to cancel a running job.
-  cancel: () => Promise<void>;
-
-  // NEW: for nicer UI labels
+  // UI labels
   jobStatus: JobStatus | "uploading" | null;
+
+  // NEW: cancel support
+  cancel: () => Promise<void>;
 }
 
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Backend base URL:
+// - local dev: http://localhost:8000
+// - production (GitHub Pages): set VITE_API_BASE in build step
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "http://localhost:8000").replace(
+  /\/$/,
+  ""
+);
+
+function apiUrl(p: string) {
+  if (!p) return API_BASE;
+  if (p.startsWith("http://") || p.startsWith("https://")) return p;
+  return `${API_BASE}${p.startsWith("/") ? p : `/${p}`}`;
 }
 
 export function useVideoAnalysis(): UseVideoAnalysisReturn {
@@ -33,12 +64,14 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
     null
   );
 
-  const [cancelUrl, setCancelUrl] = useState<string | null>(null);
+  // store enqueue info so we can cancel
+  const enqueueRef = useRef<AnalyzeEnqueueResponse | null>(null);
 
   const analyzeVideo = async (file: File) => {
     setIsAnalyzing(true);
     setError(null);
     setJobStatus("uploading");
+    enqueueRef.current = null;
 
     try {
       // Demo mode - simulate API delay and return mock data
@@ -57,7 +90,7 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
       formData.append("file", file);
 
       // 1) enqueue job
-      const enqueueRes = await fetch("/api/analyze", {
+      const enqueueRes = await fetch(apiUrl("/api/analyze"), {
         method: "POST",
         body: formData,
       });
@@ -67,8 +100,9 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
       }
 
       const enqueue: AnalyzeEnqueueResponse = await enqueueRes.json();
+      enqueueRef.current = enqueue;
+
       setJobStatus("queued");
-      setCancelUrl(enqueue.cancel_url ?? null);
 
       // 2) poll job status
       const intervalMs = 750;
@@ -76,22 +110,20 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
       const start = Date.now();
 
       while (true) {
-        const statusRes = await fetch(enqueue.status_url);
+        const statusRes = await fetch(apiUrl(enqueue.status_url));
         if (!statusRes.ok) {
           throw new Error(`Job status failed: ${statusRes.statusText}`);
         }
 
-        const job: JobStatusResponse = await statusRes.json();
+        const job: JobResponse = await statusRes.json();
         setJobStatus(job.status);
-
-        if (job.status === "cancelled") {
-          // Job was cancelled (either by the user or server-side).
-          setCancelUrl(null);
-          break;
-        }
 
         if (job.status === "error") {
           throw new Error(job.error ?? "Analysis job failed");
+        }
+
+        if (job.status === "cancelled") {
+          throw new Error("Analysis cancelled.");
         }
 
         if (job.status === "done") {
@@ -100,7 +132,8 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
           // Backend returns plot_url (snake_case). Map to plotUrl for TS + UI.
           const data: AnalysisResult = {
             ...raw,
-            plotUrl: raw?.plotUrl ?? raw?.plot_url ?? null,
+            plotUrl: raw?.plot_url ?? raw?.plotUrl ?? null,
+            videoUrl: raw?.videoUrl ?? raw?.video_url ?? raw?.video_url ?? raw?.videoUrl,
           };
 
           setResult(data);
@@ -130,14 +163,15 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
   };
 
   const cancel = async () => {
-    // Best-effort cancel. Backend will mark job as cancelled immediately,
-    // but the worker process may still finish in the background.
-    if (!cancelUrl) return;
+    const enqueue = enqueueRef.current;
+    if (!enqueue?.cancel_url) return;
+
     try {
-      await fetch(cancelUrl, { method: "POST" });
+      await fetch(apiUrl(enqueue.cancel_url), { method: "POST" });
       setJobStatus("cancelled");
+      setIsAnalyzing(false);
     } catch {
-      // ignore
+      // ignore cancel errors
     }
   };
 
@@ -146,7 +180,7 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
     setError(null);
     setResult(null);
     setJobStatus(null);
-    setCancelUrl(null);
+    enqueueRef.current = null;
   };
 
   return {
@@ -154,8 +188,8 @@ export function useVideoAnalysis(): UseVideoAnalysisReturn {
     error,
     result,
     analyzeVideo,
-    cancel,
     reset,
     jobStatus,
+    cancel,
   };
 }

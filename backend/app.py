@@ -85,10 +85,16 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # local dev
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://chowdharyaarna.github.io",
+
+        # OPTIONAL: add your tunnel origin here when you have it
+        # "https://random-thing.trycloudflare.com",
+        # "https://xxxx.ngrok-free.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

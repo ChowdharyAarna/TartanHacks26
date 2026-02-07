@@ -15,6 +15,18 @@ interface ResultsViewProps {
   onReset: () => void;
 }
 
+// Backend base URL (same pattern as useVideoAnalysis.ts)
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "http://localhost:8000").replace(
+  /\/$/,
+  ""
+);
+
+function absUrl(p: string | null | undefined): string {
+  if (!p) return "";
+  if (p.startsWith("http://") || p.startsWith("https://")) return p;
+  return `${API_BASE}${p.startsWith("/") ? p : `/${p}`}`;
+}
+
 export function ResultsView({ result, onReset }: ResultsViewProps) {
   const videoRef = useRef<VideoPlayerHandle>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -29,17 +41,14 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
     (result as any)?.breath_feedback?.messages ??
     (result as any)?.breathFeedback?.messages ??
     (result as any)?.postGraphMessages ??
+    (result as any)?.recommendations ?? // NEW: backend injects here too
     [];
 
   const hasFeedback =
     Array.isArray(feedbackMessages) && feedbackMessages.length > 0;
 
-  const plotUrl =
-    (result as any)?.plotUrl ?? (result as any)?.plot_url ?? (result as any)?.plotUrl;
-  const singingPngUrl =
-    (result as any)?.singing_analysis?.results?.artifacts?.report_png_url;
-  const singingCsvUrl =
-    (result as any)?.singing_analysis?.results?.artifacts?.timeline_csv_url;
+  // Fix video URL for GitHub Pages (backend returns "/media/...")
+  const videoSrc = absUrl(result.videoUrl);
 
   return (
     <div className="min-h-screen bg-background">
@@ -63,7 +72,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
           <div className="lg:col-span-3 space-y-4">
             <VideoPlayer
               ref={videoRef}
-              src={result.videoUrl}
+              src={videoSrc}
               onTimeUpdate={setCurrentTime}
               onDurationChange={setDuration}
             />
@@ -79,7 +88,17 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               />
             </div>
 
-            {/* ✅ Feedback card BEFORE graphs */}
+            {/* Live waveform synced to playback */}
+            {result.report && (
+              <div className="bg-card rounded-xl p-4 border">
+                <h2 className="text-base font-semibold mb-3">
+                  Breathing Waveform (synced)
+                </h2>
+                <WaveformPlot report={result.report} currentTime={currentTime} />
+              </div>
+            )}
+
+            {/* ✅ Feedback card AFTER graphs */}
             {hasFeedback && (
               <div className="bg-card rounded-xl p-4 border">
                 <div className="flex items-center justify-between mb-2">
@@ -101,71 +120,6 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
                 </div>
               </div>
             )}
-
-            {/* Live waveform synced to playback */}
-            {result.report && (
-              <div className="bg-card rounded-xl p-4 border">
-                <h2 className="text-base font-semibold mb-3">
-                  Breathing Waveform (synced)
-                </h2>
-                <WaveformPlot report={result.report} currentTime={currentTime} />
-              </div>
-            )}
-
-            {/* Backend-generated plot (static PNG) */}
-            {/* {plotUrl && (
-              <div className="bg-card rounded-xl p-4 border">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-base font-semibold">Breath plot (PNG)</h2>
-                  <a
-                    href={plotUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Open
-                  </a>
-                </div>
-                <img
-                  src={plotUrl}
-                  alt="Breath plot"
-                  className="w-full rounded-lg border bg-background"
-                  loading="lazy"
-                />
-              </div>
-            )} */}
-
-            {/* Singing analysis artifacts (if enabled on backend) */}
-            {(singingPngUrl || singingCsvUrl) && (
-              <div className="bg-card rounded-xl p-4 border">
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-base font-semibold">Singing analysis</h2>
-                  <span className="text-xs text-muted-foreground">Artifacts</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {singingPngUrl && (
-                    <a
-                      href={singingPngUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-2 rounded-md border bg-background/40 text-sm hover:bg-muted"
-                    >
-                      Open report plot
-                    </a>
-                  )}
-                  {singingCsvUrl && (
-                    <a
-                      href={singingCsvUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-2 rounded-md border bg-background/40 text-sm hover:bg-muted"
-                    >
-                      Download timeline CSV
-                    </a>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Right Column - Analysis */}
@@ -175,7 +129,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               explanation={result.shortExplanation}
             />
 
-            {/* <SummaryCards summary={result.summary} /> */}
+            <SummaryCards summary={result.summary} />
 
             <AnnotationList
               annotations={result.annotations}

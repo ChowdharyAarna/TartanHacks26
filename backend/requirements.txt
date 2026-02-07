@@ -1,12 +1,83 @@
-fastapi
-uvicorn[standard]
-python-multipart
-opencv-python
-mediapipe
-scipy
-matplotlib
-numpy>=1.23
-librosa>=0.10.0
+# ------------------------
+# Core backend / API
+# ------------------------
+fastapi>=0.128.0
+uvicorn>=0.40.0
+python-multipart>=0.0.22
+python-dotenv>=1.2.0
+watchfiles>=1.1.0
+uvloop>=0.22.0
+httptools>=0.7.0
+websockets>=16.0
+
+
+# ------------------------
+# Numerical / signal processing
+# ------------------------
+numpy>=2.3.0
+scipy>=1.17.0
+scikit-learn>=1.8.0
+librosa>=0.11.0
+numba>=0.63.0
+soundfile>=0.13.0
+audioread>=3.1.0
+soxr>=1.0.0
+
+
+# ------------------------
+# Plotting (backend plots)
+# ------------------------
+matplotlib>=3.10.0
+
+
+# ------------------------
+# Video / pose pipeline
+# ------------------------
+opencv-python>=4.13.0
+opencv-contrib-python>=4.13.0
+mediapipe>=0.10.14
+
+
+# ------------------------
+# Audio breath detection / VAD
+# ------------------------
 webrtcvad>=2.0.10
-demucs
-matplotlib>=3.6
+
+
+# ------------------------
+# Source separation (Demucs)
+# ------------------------
+demucs>=4.0.1
+openunmix>=1.3.0
+julius>=0.2.7
+einops>=0.8.0
+omegaconf>=2.3.0
+dora-search>=0.1.12
+submitit>=1.5.4
+treetable>=0.2.6
+lameenc>=1.8.1
+
+
+# ------------------------
+# Torch stack (needed by demucs + torchaudio)
+# ------------------------
+torch>=2.1.0
+torchaudio>=2.1.0
+torchcodec>=0.10.0
+
+
+# ------------------------
+# General utilities
+# ------------------------
+requests>=2.32.0
+tqdm>=4.67.0
+joblib>=1.5.0
+PyYAML>=6.0.0
+pillow>=12.0.0
+
+
+# ------------------------
+# JAX (used indirectly by mediapipe / ML tooling)
+# ------------------------
+jax>=0.4.30
+jaxlib>=0.4.30

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline.bad_singing import Config, run_pipeline as run_singing_pipeline
 
-from pipeline.breath_feedback_pipeline import analyze_breaths_and_bad_regions
+from pipeline.breath_feedback_pipeline import redistribute_bad_breaths, print_redistribution_summary
 # -----------------------------
 # Paths / storage
 # -----------------------------
@@ -312,12 +312,14 @@ async def analyze(file: UploadFile = File(...)) -> JSONResponse:
     try:
         # Check if singing analysis succeeded
         if singing_results.get("success") and "results" in singing_results:
-            breath_feedback = analyze_breaths_and_bad_regions(
-                input_media_path=str(out_path),  # Use actual uploaded video
-                breaths_dict=resp_out,
-                bad_dict=singing_results["results"],  # FIXED: Extract nested results
-                out_dir=str(OUTPUT_DIR / vid_id)
-            )
+            # breath_feedback = analyze_breaths_and_bad_regions(
+            #     input_media_path=str(out_path),  # Use actual uploaded video
+            #     breaths_dict=resp_out,
+            #     bad_dict=singing_results["results"],  # FIXED: Extract nested results
+            #     out_dir=str(OUTPUT_DIR / vid_id)
+            # )
+            breath_feedback = redistribute_bad_breaths(resp_out, singing_results["results"], anchor_mode="before")
+            print_redistribution_summary(breath_feedback)
             result["breath_feedback"] = breath_feedback
         else:
             # Singing analysis failed, skip breath feedback

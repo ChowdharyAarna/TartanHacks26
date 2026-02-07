@@ -15,14 +15,30 @@ from fastapi.staticfiles import StaticFiles
 
 from pipeline.fused_breaths import extract_fused_resp
 
+# Import the bad singing detection pipeline
+import sys
+import os
+
+# Add the directory containing bad_singing_onefile_fixed.py to the path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from pipeline.bad_singing import Config, run_pipeline as run_singing_pipeline
+
+from pipeline.breath_feedback_pipeline import analyze_breaths_and_bad_regions
 # -----------------------------
 # Paths / storage
 # -----------------------------
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
+SINGING_OUTPUT_DIR = BASE_DIR / "outputs" / "singing_analysis"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SINGING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Store analysis results in memory (or use a database in production)
+# Maps video_id -> singing_analysis_results
+SINGING_RESULTS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 # -----------------------------
 # App
@@ -189,10 +205,77 @@ def make_breath_plot(out: Dict[str, Any], save_path: Path) -> None:
 
 
 # -----------------------------
-# API
+# Bad Singing Analysis Helper
+# -----------------------------
+def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
+    """
+    Run the bad singing detection pipeline on the uploaded video.
+    Returns a dict with singing analysis results and stores it in SINGING_RESULTS_CACHE.
+    """
+    try:
+        # Create output directory for this specific video
+        out_dir = SINGING_OUTPUT_DIR / vid_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configure the singing analysis
+        cfg = Config(
+            sr=16000,
+            top_db_split=30.0,
+            strain_thr=0.62,
+            collapse_thr=0.62,
+            top_k_strain=3,
+            top_k_collapse=3,
+            edge_ignore_s=1.0,
+            phrase_rms_percentile=30.0,
+            save_timeline=True,
+            save_plot=True,
+        )
+        
+        # Run the pipeline
+        results = run_singing_pipeline(video_path, str(out_dir), cfg)
+        
+        # Convert file paths to URLs for frontend access
+        if "artifacts" in results:
+            if "timeline_csv" in results["artifacts"]:
+                csv_path = Path(results["artifacts"]["timeline_csv"])
+                if csv_path.exists():
+                    rel_path = csv_path.relative_to(OUTPUT_DIR)
+                    results["artifacts"]["timeline_csv_url"] = f"/outputs/{rel_path}"
+            
+            if "report_png" in results["artifacts"]:
+                png_path = Path(results["artifacts"]["report_png"])
+                if png_path.exists():
+                    rel_path = png_path.relative_to(OUTPUT_DIR)
+                    results["artifacts"]["report_png_url"] = f"/outputs/{rel_path}"
+        
+        # Store results in cache
+        SINGING_RESULTS_CACHE[vid_id] = results
+        
+        return {
+            "success": True,
+            "video_id": vid_id,
+            "results": results
+        }
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return {
+            "success": False,
+            "error": str(e),
+            "error_details": error_details
+        }
+
+
+# -----------------------------
+# API Endpoints
 # -----------------------------
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    Main endpoint: analyzes both breathing and singing from uploaded video.
+    Stores singing results in SINGING_RESULTS_CACHE.
+    """
     if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
         return JSONResponse(
             {"error": f"Unsupported content type: {file.content_type}"},
@@ -208,9 +291,10 @@ async def analyze(file: UploadFile = File(...)) -> JSONResponse:
     data = await file.read()
     out_path.write_bytes(data)
 
+    # Run breathing analysis
     resp_out = extract_fused_resp(str(out_path), outputs_dir=str(OUTPUT_DIR))
 
-    # Generate plot file and return URL
+    # Generate breathing plot
     plot_name = f"breath_plot_{vid_id}.png"
     plot_path = OUTPUT_DIR / plot_name
     make_breath_plot(resp_out, plot_path)
@@ -219,4 +303,95 @@ async def analyze(file: UploadFile = File(...)) -> JSONResponse:
     result = _build_analysis_result(resp_out, video_url)
     result["plot_url"] = f"/outputs/{plot_name}" if plot_path.exists() else None
 
+    # Run singing analysis (results stored in SINGING_RESULTS_CACHE)
+    singing_results = run_singing_analysis(str(out_path), vid_id)
+    result["singing_analysis"] = singing_results
+    result["video_id"] = vid_id
+
+    # Run breath feedback analysis - FIXED
+    try:
+        # Check if singing analysis succeeded
+        if singing_results.get("success") and "results" in singing_results:
+            breath_feedback = analyze_breaths_and_bad_regions(
+                input_media_path=str(out_path),  # Use actual uploaded video
+                breaths_dict=resp_out,
+                bad_dict=singing_results["results"],  # FIXED: Extract nested results
+                out_dir=str(OUTPUT_DIR / vid_id)
+            )
+            result["breath_feedback"] = breath_feedback
+        else:
+            # Singing analysis failed, skip breath feedback
+            result["breath_feedback"] = {
+                "error": "Singing analysis failed",
+                "details": singing_results.get("error", "Unknown error")
+            }
+    except Exception as e:
+        import traceback
+        print(f"Breath feedback analysis failed: {e}")
+        print(traceback.format_exc())
+        result["breath_feedback"] = {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
     return JSONResponse(result)
+
+@app.post("/api/analyze-singing")
+async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    Endpoint specifically for singing analysis without breathing analysis.
+    Stores singing results in SINGING_RESULTS_CACHE.
+    """
+    if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
+        return JSONResponse(
+            {"error": f"Unsupported content type: {file.content_type}"},
+            status_code=400,
+        )
+
+    filename = (file.filename or "").lower()
+    suffix = ".mp4" if filename.endswith(".mp4") else ".mov"
+
+    vid_id = uuid.uuid4().hex
+    out_path = UPLOAD_DIR / f"{vid_id}{suffix}"
+
+    data = await file.read()
+    out_path.write_bytes(data)
+
+    video_url = f"/media/{out_path.name}"
+    
+    # Run singing analysis (results stored in SINGING_RESULTS_CACHE)
+    singing_results = run_singing_analysis(str(out_path), vid_id)
+    
+    return JSONResponse({
+        "videoUrl": video_url,
+        "video_id": vid_id,
+        "singing_analysis": singing_results
+    })
+
+
+@app.get("/api/singing-results/{vid_id}")
+async def get_singing_results(vid_id: str) -> JSONResponse:
+    """
+    Retrieve stored singing analysis results by video ID.
+    """
+    if vid_id not in SINGING_RESULTS_CACHE:
+        return JSONResponse(
+            {"error": f"No singing analysis found for video ID: {vid_id}"},
+            status_code=404,
+        )
+    
+    return JSONResponse({
+        "video_id": vid_id,
+        "results": SINGING_RESULTS_CACHE[vid_id]
+    })
+
+
+@app.get("/api/singing-results")
+async def list_singing_results() -> JSONResponse:
+    """
+    List all video IDs that have singing analysis results.
+    """
+    return JSONResponse({
+        "video_ids": list(SINGING_RESULTS_CACHE.keys()),
+        "count": len(SINGING_RESULTS_CACHE)
+    })

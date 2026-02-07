@@ -1,25 +1,52 @@
-import { useCallback, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { Upload, FileVideo, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
 interface VideoUploadProps {
   onAnalyze: (file: File) => void;
+  onCancel?: () => void | Promise<void>;
   isAnalyzing: boolean;
+  statusText?: string | null;
 }
 
-export function VideoUpload({ onAnalyze, isAnalyzing }: VideoUploadProps) {
+export function VideoUpload({ onAnalyze, onCancel, isAnalyzing, statusText }: VideoUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const handleFile = useCallback((selectedFile: File) => {
-    if (selectedFile.type !== "video/mp4") {
+  // NEW: fake progress bar value
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setProgress(0);
       return;
     }
+
+    // Start at a non-zero value so it doesn’t look stuck
+    setProgress(8);
+
+    const id = window.setInterval(() => {
+      setProgress((p) => {
+        const cap = 92; // hover under 100% until done
+        if (p >= cap) return cap;
+        const bump = 2 + Math.random() * 6; // 2..8
+        return Math.min(cap, p + bump);
+      });
+    }, 500);
+
+    return () => window.clearInterval(id);
+  }, [isAnalyzing]);
+
+  const handleFile = useCallback((selectedFile: File) => {
+    const okType =
+      selectedFile.type === "video/mp4" || selectedFile.type === "video/quicktime";
+    const okExt = /\.(mp4|mov)$/i.test(selectedFile.name);
+    if (!okType && !okExt) return;
     setFile(selectedFile);
 
     // Get video duration
@@ -87,12 +114,21 @@ export function VideoUpload({ onAnalyze, isAnalyzing }: VideoUploadProps) {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const analyzingLabel =
+    statusText === "queued"
+      ? "Queued…"
+      : statusText === "running"
+      ? "Analyzing…"
+      : statusText === "cancelled"
+      ? "Cancelling…"
+      : "Uploading…";
+
   return (
     <div className="w-full max-w-xl mx-auto">
       <input
         ref={inputRef}
         type="file"
-        accept="video/mp4"
+        accept="video/mp4,video/quicktime,.mp4,.mov"
         onChange={handleInputChange}
         className="hidden"
         disabled={isAnalyzing}
@@ -121,9 +157,7 @@ export function VideoUpload({ onAnalyze, isAnalyzing }: VideoUploadProps) {
             <p className="text-muted-foreground text-center mb-4">
               or click to browse
             </p>
-            <p className="text-sm text-muted-foreground">
-              Accepts MP4 files only
-            </p>
+            <p className="text-sm text-muted-foreground">Accepts MP4 or MOV</p>
           </CardContent>
         </Card>
       ) : (
@@ -164,7 +198,7 @@ export function VideoUpload({ onAnalyze, isAnalyzing }: VideoUploadProps) {
               {isAnalyzing ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Analyzing your video…
+                  {analyzingLabel}
                 </>
               ) : (
                 "Analyze Video"
@@ -172,9 +206,28 @@ export function VideoUpload({ onAnalyze, isAnalyzing }: VideoUploadProps) {
             </Button>
 
             {isAnalyzing && (
-              <p className="text-sm text-muted-foreground text-center mt-3">
-                This may take up to a minute
-              </p>
+              <div className="mt-4 space-y-2">
+                <Progress value={progress} className="h-2" />
+                <p className="text-sm text-muted-foreground text-center">
+                  This may take up to a minute
+                </p>
+
+                {onCancel && (
+                  <div className="flex justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancel();
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

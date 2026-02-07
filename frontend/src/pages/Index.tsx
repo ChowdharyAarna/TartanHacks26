@@ -6,7 +6,7 @@ import { useVideoAnalysis } from "@/hooks/useVideoAnalysis";
 import { Activity } from "lucide-react";
 
 const Index = () => {
-  const { isAnalyzing, error, result, analyzeVideo, reset } = useVideoAnalysis();
+  const { isAnalyzing, error, result, analyzeVideo, reset, jobStatus, cancel } = useVideoAnalysis();
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
   const handleAnalyze = async (file: File) => {
@@ -66,7 +66,12 @@ const Index = () => {
                   feedback on breath control
                 </p>
               </div>
-              <VideoUpload onAnalyze={handleAnalyze} isAnalyzing={isAnalyzing} />
+              <VideoUpload
+                onAnalyze={handleAnalyze}
+                onCancel={cancel}
+                isAnalyzing={isAnalyzing}
+                statusText={jobStatus}
+              />
             </>
           )}
 

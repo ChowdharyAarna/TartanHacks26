@@ -34,6 +34,10 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
   const hasFeedback =
     Array.isArray(feedbackMessages) && feedbackMessages.length > 0;
 
+  const plotUrl = (result as any)?.plotUrl ?? (result as any)?.plot_url ?? (result as any)?.plotUrl;
+  const singingPngUrl = (result as any)?.singing_analysis?.results?.artifacts?.report_png_url;
+  const singingCsvUrl = (result as any)?.singing_analysis?.results?.artifacts?.timeline_csv_url;
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -82,6 +86,61 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
                   report={result.report}
                   currentTime={currentTime}
                 />
+              </div>
+            )}
+
+            {/* Backend-generated plot (static PNG) */}
+            {plotUrl && (
+              <div className="bg-card rounded-xl p-4 border">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-base font-semibold">Breath plot (PNG)</h2>
+                  <a
+                    href={plotUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Open
+                  </a>
+                </div>
+                <img
+                  src={plotUrl}
+                  alt="Breath plot"
+                  className="w-full rounded-lg border bg-background"
+                  loading="lazy"
+                />
+              </div>
+            )}
+
+            {/* Singing analysis artifacts (if enabled on backend) */}
+            {(singingPngUrl || singingCsvUrl) && (
+              <div className="bg-card rounded-xl p-4 border">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-base font-semibold">Singing analysis</h2>
+                  <span className="text-xs text-muted-foreground">Artifacts</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {singingPngUrl && (
+                    <a
+                      href={singingPngUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-2 rounded-md border bg-background/40 text-sm hover:bg-muted"
+                    >
+                      Open report plot
+                    </a>
+                  )}
+                  {singingCsvUrl && (
+                    <a
+                      href={singingCsvUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-2 rounded-md border bg-background/40 text-sm hover:bg-muted"
+                    >
+                      Download timeline CSV
+                    </a>
+                  )}
+                </div>
               </div>
             )}
 

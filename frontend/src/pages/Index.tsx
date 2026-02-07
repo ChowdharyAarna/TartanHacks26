@@ -3,10 +3,11 @@ import { VideoUpload } from "@/components/VideoUpload";
 import { ResultsView } from "@/components/ResultsView";
 import { ErrorCard } from "@/components/ErrorCard";
 import { useVideoAnalysis } from "@/hooks/useVideoAnalysis";
-import { Activity } from "lucide-react";
+import Logo2 from "@/components/Logo2.png";
 
 const Index = () => {
-  const { isAnalyzing, error, result, analyzeVideo, reset, jobStatus, cancel } = useVideoAnalysis();
+  const { isAnalyzing, error, result, analyzeVideo, reset, jobStatus, cancel } =
+    useVideoAnalysis();
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
   const handleAnalyze = async (file: File) => {
@@ -37,11 +38,14 @@ const Index = () => {
       <header className="border-b">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold">Video Breath Control Analysis</h1>
+            <img
+              src={Logo2}
+              alt="Vital Vocals logo"
+              className="w-16 h-16 object-contain"
+            />
+
+            <div className="leading-tight">
+              <h1 className="text-xl font-bold text-primary">Vital Vocals</h1>
               <p className="text-sm text-muted-foreground">
                 Analyze your singing technique
               </p>

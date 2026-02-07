@@ -27,7 +27,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pipeline.bad_singing import Config, run_pipeline as run_singing_pipeline
-from pipeline.breath_feedback_pipeline import redistribute_bad_breaths, print_redistribution_summary
+from pipeline.breath_feedback_pipeline import (
+    redistribute_bad_breaths,
+    print_redistribution_summary,
+)
 
 # -----------------------------
 # Job store + executor (+ cancel)
@@ -91,7 +94,6 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://chowdharyaarna.github.io",
-
         # OPTIONAL: add your tunnel origin here when you have it
         # "https://random-thing.trycloudflare.com",
         # "https://xxxx.ngrok-free.app",
@@ -145,14 +147,17 @@ def _build_analysis_result(resp_out: Dict[str, Any], video_url: str) -> Dict[str
         scores = []
 
     # annotations: inhalation durations
+    # NOTE: your inhalations dict currently has t_start/t_end/duration_s (no t_peak/confidence)
     annotations: List[Dict[str, Any]] = []
     for inh in inhalations[:50]:
-        tp = float(inh.get("t_peak", 0.0))
-        dur = float(inh.get("duration_s", 0.0))
-        conf = float(inh.get("confidence", 0.0))
-        annotations.append({"time": tp, "text": f"Inhale ~{dur:.2f}s (conf {conf:.2f})"})
+        t_start = float(inh.get("t_start", 0.0))
+        t_end = float(inh.get("t_end", t_start))
+        dur = float(inh.get("duration_s", max(0.0, t_end - t_start)))
+        # place annotation at start (or midpoint if you prefer)
+        tp = t_start
+        annotations.append({"time": tp, "text": f"Inhale ~{dur:.2f}s"})
 
-    # summary
+    # summary (default from timelineScores)
     if scores:
         avg_score = sum(s["score"] for s in scores) / len(scores)
         final_score = scores[-1]["score"]
@@ -225,7 +230,8 @@ def make_breath_plot(out: Dict[str, Any], save_path: Path) -> None:
 
     for inh in inhalations:
         try:
-            ax.axvspan(float(inh["t_start"]), float(inh["t_peak"]), alpha=0.2)
+            # your inh dict uses t_start/t_end (not t_peak)
+            ax.axvspan(float(inh["t_start"]), float(inh["t_end"]), alpha=0.2)
         except Exception:
             pass
 
@@ -292,7 +298,7 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
 
 
 # -----------------------------
-# NEW: make sure messages show up even if frontend only renders shortExplanation/summary
+# NEW: normalize + inject display fields
 # -----------------------------
 def _normalize_messages(raw: Any) -> List[str]:
     if isinstance(raw, list):
@@ -303,27 +309,72 @@ def _normalize_messages(raw: Any) -> List[str]:
 def _inject_messages_into_common_fields(result: Dict[str, Any]) -> None:
     """
     Copies breath_feedback.messages into multiple commonly-rendered fields
-    so the frontend shows them WITHOUT any frontend changes.
+    WITHOUT modifying shortExplanation.
     """
     bf = result.get("breath_feedback") or {}
-    msgs = _normalize_messages(bf.get("messages"))
+    msgs = _normalize_messages(bf.get("messages")) if isinstance(bf, dict) else []
 
-    # 1) keep canonical location
-    bf["messages"] = msgs
+    # keep canonical location
+    if isinstance(bf, dict):
+        bf["messages"] = msgs
     result["breath_feedback"] = bf
 
-    # 2) add a very common top-level key many UIs already render
+    # top-level key some UIs already render
     result["recommendations"] = msgs
 
-    # 3) add into summary (if summary cards render)
+    # summary recommendations (keeps msgs available in UI if it shows them)
     summary = result.get("summary") or {}
     summary["recommendations"] = msgs
     result["summary"] = summary
 
-    # 4) append to shortExplanation (if that text block renders)
-    if msgs:
-        block = " Feedback: " + " ".join([f"• {m}" for m in msgs])
-        result["shortExplanation"] = (result.get("shortExplanation") or "").strip() + block
+
+def _inject_breathing_score_fields(result: Dict[str, Any]) -> None:
+    """
+    - Promote breathing_score.total -> summary.finalScore (0..100)
+    - Set shortExplanation to ONLY:
+        • Efficiency: X/100
+        • Support: Y/100
+        • Recovery: Z/100
+    """
+    bf = result.get("breath_feedback") or {}
+    if not isinstance(bf, dict):
+        result["shortExplanation"] = ""
+        return
+
+    bs = bf.get("breathing_score") or {}
+    if not isinstance(bs, dict):
+        result["shortExplanation"] = ""
+        return
+
+    # total -> finalScore
+    total = bs.get("total", None)
+    if total is not None:
+        try:
+            total_100 = int(round(_clamp(float(total), 0.0, 1.0) * 100))
+            summary = result.get("summary") or {}
+            summary["finalScore"] = total_100
+            result["summary"] = summary
+        except Exception:
+            pass
+
+    # subscores -> bullets
+    subs = bs.get("subscores") or {}
+    if not isinstance(subs, dict):
+        subs = {}
+
+    def to100(x: Any) -> int:
+        return int(round(_clamp(float(x), 0.0, 1.0) * 100))
+
+    lines: List[str] = []
+    if "efficiency" in subs:
+        lines.append(f"• Efficiency: {to100(subs['efficiency'])}/100")
+    if "support" in subs:
+        lines.append(f"• Support: {to100(subs['support'])}/100")
+    if "recovery" in subs:
+        lines.append(f"• Recovery: {to100(subs['recovery'])}/100")
+
+    # EXACT formatting you asked for
+    result["shortExplanation"] = "\n".join(lines)
 
 
 # -----------------------------
@@ -354,7 +405,9 @@ def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
     # Run breath feedback analysis
     try:
         if singing_results.get("success") and "results" in singing_results:
-            breath_feedback = redistribute_bad_breaths(resp_out, singing_results["results"], anchor_mode="before")
+            breath_feedback = redistribute_bad_breaths(
+                resp_out, singing_results["results"], anchor_mode="before"
+            )
 
             # Optional: console logging for debugging
             try:
@@ -362,7 +415,9 @@ def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
             except Exception:
                 pass
 
-            breath_feedback["messages"] = _normalize_messages(breath_feedback.get("messages"))
+            breath_feedback["messages"] = _normalize_messages(
+                breath_feedback.get("messages")
+            )
             result["breath_feedback"] = breath_feedback
         else:
             result["breath_feedback"] = {
@@ -375,7 +430,6 @@ def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
     except Exception as e:
         import traceback
 
-        # ✅ THIS IS THE BLOCK YOU ASKED TO ADD BACK
         result["breath_feedback"] = {
             "error": str(e),
             "traceback": traceback.format_exc(),
@@ -384,8 +438,9 @@ def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
             ],
         }
 
-    # ✅ also do this here, before returning, so frontend gets the messages
+    # Inject display fields AFTER breath_feedback exists
     _inject_messages_into_common_fields(result)
+    _inject_breathing_score_fields(result)
 
     return result
 
@@ -450,8 +505,14 @@ async def _run_job(job_id: str, video_path: str, vid_id: str, suffix: str) -> No
 # -----------------------------
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...)) -> JSONResponse:
-    if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
-        return JSONResponse({"error": f"Unsupported content type: {file.content_type}"}, status_code=400)
+    if file.content_type not in (
+        "video/mp4",
+        "video/quicktime",
+        "application/octet-stream",
+    ):
+        return JSONResponse(
+            {"error": f"Unsupported content type: {file.content_type}"}, status_code=400
+        )
 
     filename = (file.filename or "").lower()
     suffix = ".mp4" if filename.endswith(".mp4") else ".mov"
@@ -521,8 +582,14 @@ async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
     Endpoint specifically for singing analysis without breathing analysis.
     Stores singing results in SINGING_RESULTS_CACHE.
     """
-    if file.content_type not in ("video/mp4", "video/quicktime", "application/octet-stream"):
-        return JSONResponse({"error": f"Unsupported content type: {file.content_type}"}, status_code=400)
+    if file.content_type not in (
+        "video/mp4",
+        "video/quicktime",
+        "application/octet-stream",
+    ):
+        return JSONResponse(
+            {"error": f"Unsupported content type: {file.content_type}"}, status_code=400
+        )
 
     filename = (file.filename or "").lower()
     suffix = ".mp4" if filename.endswith(".mp4") else ".mov"
@@ -550,7 +617,10 @@ async def get_singing_results(vid_id: str) -> JSONResponse:
     Retrieve stored singing analysis results by video ID.
     """
     if vid_id not in SINGING_RESULTS_CACHE:
-        return JSONResponse({"error": f"No singing analysis found for video ID: {vid_id}"}, status_code=404)
+        return JSONResponse(
+            {"error": f"No singing analysis found for video ID: {vid_id}"},
+            status_code=404,
+        )
 
     return JSONResponse({"video_id": vid_id, "results": SINGING_RESULTS_CACHE[vid_id]})
 
@@ -560,4 +630,6 @@ async def list_singing_results() -> JSONResponse:
     """
     List all video IDs that have singing analysis results.
     """
-    return JSONResponse({"video_ids": list(SINGING_RESULTS_CACHE.keys()), "count": len(SINGING_RESULTS_CACHE)})
+    return JSONResponse(
+        {"video_ids": list(SINGING_RESULTS_CACHE.keys()), "count": len(SINGING_RESULTS_CACHE)}
+    )

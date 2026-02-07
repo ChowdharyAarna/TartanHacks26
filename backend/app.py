@@ -243,11 +243,9 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
     Returns a dict with singing analysis results and stores it in SINGING_RESULTS_CACHE.
     """
     try:
-        # Create output directory for this specific video
         out_dir = SINGING_OUTPUT_DIR / vid_id
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Configure the singing analysis
         cfg = Config(
             sr=16000,
             top_db_split=30.0,
@@ -261,7 +259,6 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
             save_plot=True,
         )
 
-        # Run the pipeline
         results = run_singing_pipeline(video_path, str(out_dir), cfg)
 
         # Convert file paths to URLs for frontend access
@@ -278,9 +275,7 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
                     rel_path = png_path.relative_to(OUTPUT_DIR)
                     results["artifacts"]["report_png_url"] = f"/outputs/{rel_path}"
 
-        # Store results in cache
         SINGING_RESULTS_CACHE[vid_id] = results
-
         return {"success": True, "video_id": vid_id, "results": results}
 
     except Exception as e:
@@ -288,6 +283,41 @@ def run_singing_analysis(video_path: str, vid_id: str) -> Dict[str, Any]:
 
         error_details = traceback.format_exc()
         return {"success": False, "error": str(e), "error_details": error_details}
+
+
+# -----------------------------
+# NEW: make sure messages show up even if frontend only renders shortExplanation/summary
+# -----------------------------
+def _normalize_messages(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [str(x) for x in raw if x is not None and str(x).strip() != ""]
+    return []
+
+
+def _inject_messages_into_common_fields(result: Dict[str, Any]) -> None:
+    """
+    Copies breath_feedback.messages into multiple commonly-rendered fields
+    so the frontend shows them WITHOUT any frontend changes.
+    """
+    bf = result.get("breath_feedback") or {}
+    msgs = _normalize_messages(bf.get("messages"))
+
+    # 1) keep canonical location
+    bf["messages"] = msgs
+    result["breath_feedback"] = bf
+
+    # 2) add a very common top-level key many UIs already render
+    result["recommendations"] = msgs
+
+    # 3) add into summary (if summary cards render)
+    summary = result.get("summary") or {}
+    summary["recommendations"] = msgs
+    result["summary"] = summary
+
+    # 4) append to shortExplanation (if that text block renders)
+    if msgs:
+        block = " Feedback: " + " ".join([f"• {m}" for m in msgs])
+        result["shortExplanation"] = (result.get("shortExplanation") or "").strip() + block
 
 
 # -----------------------------
@@ -304,32 +334,52 @@ def run_full_analysis(video_path: str, vid_id: str, suffix: str) -> dict:
 
     video_url = f"/media/{Path(video_path).name}"
     result = _build_analysis_result(resp_out, video_url)
-    result["plot_url"] = f"/outputs/{plot_name}" if plot_path.exists() else None
+
+    # Keep both keys since your current output has both
+    plot_url = f"/outputs/{plot_name}" if plot_path.exists() else None
+    result["plot_url"] = plot_url
+    result["plotUrl"] = plot_url
 
     # Singing analysis
     singing_results = run_singing_analysis(video_path, vid_id)
     result["singing_analysis"] = singing_results
     result["video_id"] = vid_id
 
-    # Breath feedback
+    # Run breath feedback analysis
     try:
         if singing_results.get("success") and "results" in singing_results:
             breath_feedback = redistribute_bad_breaths(resp_out, singing_results["results"], anchor_mode="before")
-            # Optional: keep console logging for debugging
+
+            # Optional: console logging for debugging
             try:
                 print_redistribution_summary(breath_feedback)
             except Exception:
                 pass
+
+            breath_feedback["messages"] = _normalize_messages(breath_feedback.get("messages"))
             result["breath_feedback"] = breath_feedback
         else:
             result["breath_feedback"] = {
                 "error": "Singing analysis failed",
                 "details": singing_results.get("error", "Unknown error"),
+                "messages": [
+                    "Singing analysis failed, so we couldn't generate breath feedback.",
+                ],
             }
     except Exception as e:
         import traceback
 
-        result["breath_feedback"] = {"error": str(e), "traceback": traceback.format_exc()}
+        # ✅ THIS IS THE BLOCK YOU ASKED TO ADD BACK
+        result["breath_feedback"] = {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "messages": [
+                "Breath feedback analysis failed unexpectedly. Try a different clip.",
+            ],
+        }
+
+    # ✅ also do this here, before returning, so frontend gets the messages
+    _inject_messages_into_common_fields(result)
 
     return result
 
@@ -473,16 +523,19 @@ async def analyze_singing(file: UploadFile = File(...)) -> JSONResponse:
 
     vid_id = uuid.uuid4().hex
     out_path = UPLOAD_DIR / f"{vid_id}{suffix}"
-
-    data = await file.read()
-    out_path.write_bytes(data)
+    out_path.write_bytes(await file.read())
 
     video_url = f"/media/{out_path.name}"
 
-    # Run singing analysis (results stored in SINGING_RESULTS_CACHE)
     singing_results = run_singing_analysis(str(out_path), vid_id)
 
-    return JSONResponse({"videoUrl": video_url, "video_id": vid_id, "singing_analysis": singing_results})
+    return JSONResponse(
+        {
+            "videoUrl": video_url,
+            "video_id": vid_id,
+            "singing_analysis": singing_results,
+        }
+    )
 
 
 @app.get("/api/singing-results/{vid_id}")

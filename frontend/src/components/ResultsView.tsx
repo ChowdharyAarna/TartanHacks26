@@ -24,6 +24,16 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
     videoRef.current?.seekTo(time);
   }, []);
 
+  // ✅ Pull messages safely (works even if breath_feedback is missing)
+  const feedbackMessages =
+    (result as any)?.breath_feedback?.messages ??
+    (result as any)?.breathFeedback?.messages ??
+    (result as any)?.postGraphMessages ??
+    [];
+
+  const hasFeedback =
+    Array.isArray(feedbackMessages) && feedbackMessages.length > 0;
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -62,13 +72,39 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               />
             </div>
 
-            {/* Live waveform synced to playback (moved lower) */}
+            {/* Live waveform synced to playback */}
             {result.report && (
               <div className="bg-card rounded-xl p-4 border">
                 <h2 className="text-base font-semibold mb-3">
                   Breathing Waveform (synced)
                 </h2>
-                <WaveformPlot report={result.report} currentTime={currentTime} />
+                <WaveformPlot
+                  report={result.report}
+                  currentTime={currentTime}
+                />
+              </div>
+            )}
+
+            {/* ✅ Feedback card AFTER graphs */}
+            {hasFeedback && (
+              <div className="bg-card rounded-xl p-4 border">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-base font-semibold">Breath feedback</h2>
+                  <span className="text-xs text-muted-foreground">
+                    Suggestions based on your clip
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {feedbackMessages.map((msg: string, i: number) => (
+                    <div
+                      key={i}
+                      className="rounded-lg border bg-background/40 px-3 py-2 text-sm"
+                    >
+                      {msg}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

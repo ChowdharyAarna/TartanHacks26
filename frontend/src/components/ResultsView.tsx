@@ -78,7 +78,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
             />
 
             {/* Timeline below video */}
-            <div className="bg-card rounded-xl p-4 border">
+            {/* <div className="bg-card rounded-xl p-4 border">
               <BreathTimeline
                 timelineScores={result.timelineScores}
                 annotations={result.annotations}
@@ -86,7 +86,7 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
                 duration={duration}
                 onSeek={handleSeek}
               />
-            </div>
+            </div> */}
 
             {/* Live waveform synced to playback */}
             {result.report && (
@@ -129,13 +129,13 @@ export function ResultsView({ result, onReset }: ResultsViewProps) {
               explanation={result.shortExplanation}
             />
 
-            <SummaryCards summary={result.summary} />
+            {/* <SummaryCards summary={result.summary} /> */}
 
-            <AnnotationList
+            {/* <AnnotationList
               annotations={result.annotations}
               onSeek={handleSeek}
               currentTime={currentTime}
-            />
+            /> */}
 
             <BackendDataPanel result={result} />
           </div>

@@ -1,4 +1,4 @@
-# BreathMap (TartanHacks 2026)
+# BreathMap (TartanHacks 2026).
 
 BreathMap is a lightweight web app that analyzes short performance videos to extract **breathing signals from pose motion** and optionally detect **singing strain/collapse** from audio. It returns a single JSON report + diagnostic artifacts that the frontend renders into an interactive timeline.
 
